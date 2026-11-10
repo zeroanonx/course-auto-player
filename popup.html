@@ -32,16 +32,16 @@
 </head>
 <body>
   <h1><span class="logo">▶</span>课程自动连播助手</h1>
-  <p>仅对 hbnun.lsedu.vip 生效。默认自动连播全部课时；播放被拦截会自动刷新继续，全部完成后暂停。</p>
+  <p>仅对 hbnun.lsedu.vip 生效。检测到视频播放后自动接管，每节 5~10 秒播完并连播全部课时。</p>
   <ol>
     <li>打开课程播放页；</li>
-    <li>点页面左侧浮窗的“开始”；</li>
-    <li>视频会拖到结尾并记录进度，然后自动进入下一节；被拦截时自动刷新续播，全部完成后暂停。</li>
+    <li>站点视频开始播放后自动接管，也可手动点浮窗“开始”；</li>
+    <li>每节随机 5~10 秒播完并进入下一节，全部完成后暂停。</li>
   </ol>
   <button id="inject">重新注入到当前页</button>
   <button class="secondary" id="open">打开课程页</button>
   <div class="msg" id="msg"></div>
-  <div class="tip">被拦截时会自动刷新并继续；连续 4 次仍失败则停下等待手动处理。</div>
+  <div class="tip">浮窗可拖动、缩放和覆盖视频区；被拦截时会自动刷新继续。</div>
   <script src="popup.js"></script>
 </body>
 </html>

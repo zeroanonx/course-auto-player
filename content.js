@@ -2,19 +2,19 @@
  * 课程自动连播助手
  *
  * 原理：
- *   1. 找到站点播放器里的 <video>，直接把 currentTime 拖到结尾前 0.2 秒；
- *   2. 播放 0.2 秒后触发站点自己的 ended 事件，站点会按它原本的逻辑
+ *   1. 找到站点播放器里的 <video>，快速拖到结尾前 5~10 秒；
+ *   2. 正常播放最后 5~10 秒，触发站点自己的 ended 事件，站点会按它原本的逻辑
  *      调用 saveLearnRecord 记录进度；
- *   3. 默认只完成当前节，记录完成后立即暂停；取消“只完成当前页”后，
- *      监听视频元素/视频地址变化确认切换；若站点没有自动切换，
- *      则自动点击右侧章节列表里的“下一节”。
+ *   3. 监听视频播放状态，站点视频一开始播放就自动接管；
+ *   4. 监听视频元素/视频地址变化确认切换；若站点没有自动切换，
+ *      则自动点击右侧章节列表里的“下一节”，折叠章节会自动展开。
  *
  * 注意：本脚本不修改站点接口、不伪造请求，只做“解除拖动限制 + 拖动进度条 + 点击下一节”。
  */
 (() => {
   'use strict';
 
-  const VERSION = '1.3.0';
+  const VERSION = '1.4.0';
   const HOST_ID = 'cap-helper-host';
   // 扩展重新加载后旧 content script 会失效，但页面里的标记仍在。
   // 用版本号 + 代际号允许“重新注入”，并让旧脚本的循环自行退出。
@@ -30,8 +30,13 @@
     paused: false,
     muted: true,
     autoStart: false,
+    watch: true,
     single: false,
     collapsed: false,
+    ui: null,
+    uiCollapsedHeight: 44,
+    autoSuppressed: false,
+    playWasActive: false,
     holdUntil: 0,
     holdTimer: null,
     refreshing: false,
@@ -310,6 +315,17 @@
     });
   }
 
+  // 每节随机 5~10 秒；测试时可注入固定值
+  function plannedSeconds() {
+    const testValue = Number(window.__CAP_TEST_PLAN_SECONDS__);
+    if (Number.isFinite(testValue) && testValue > 0) return testValue;
+    return 5 + Math.random() * 5;
+  }
+
+  function clamp(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+  }
+
   /* ------------------------------------------------------------------ */
   /* UI                                                                 */
   /* ------------------------------------------------------------------ */
@@ -318,19 +334,76 @@
   let shadow = null;
   const ui = {};
 
+  function currentUiRect() {
+    if (!host) return S.ui;
+    return {
+      x: Math.round(host.offsetLeft),
+      y: Math.round(host.offsetTop),
+      w: Math.round(host.offsetWidth),
+      h: Math.round(host.offsetHeight),
+    };
+  }
+
+  function applyUiRect(rect) {
+    if (!host || !rect) return;
+    const maxW = Math.max(240, window.innerWidth - 8);
+    const maxH = Math.max(140, window.innerHeight - 8);
+    const w = clamp(Number(rect.w) || 320, 240, maxW);
+    const h = clamp(Number(rect.h) || 360, S.uiCollapsedHeight, maxH);
+    const x = clamp(Number(rect.x) || 18, 0, Math.max(0, window.innerWidth - w));
+    const y = clamp(Number(rect.y) || 84, 0, Math.max(0, window.innerHeight - h));
+    host.style.left = `${Math.round(x)}px`;
+    host.style.top = `${Math.round(y)}px`;
+    host.style.width = `${Math.round(w)}px`;
+    host.style.height = `${S.collapsed ? S.uiCollapsedHeight : Math.round(h)}px`;
+    S.ui = { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) };
+  }
+
+  function coverVideoArea() {
+    const video = getVideo();
+    if (!video) return;
+    const rect = video.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    S.collapsed = false;
+    if (ui.body) ui.body.style.display = 'block';
+    if (ui.collapse) ui.collapse.textContent = '−';
+    applyUiRect({
+      x: Math.round(rect.left),
+      y: Math.round(rect.top),
+      w: Math.round(rect.width),
+      h: Math.round(rect.height),
+    });
+    saveSettings();
+  }
+
+  function resetUiPosition() {
+    S.collapsed = false;
+    if (ui.body) ui.body.style.display = 'block';
+    if (ui.collapse) ui.collapse.textContent = '−';
+    applyUiRect({ x: 18, y: 84, w: 320, h: 360 });
+    saveSettings();
+  }
+
   function mountUI() {
     if (host) return;
     // 清掉扩展重载前遗留的旧浮窗
     document.getElementById(HOST_ID)?.remove();
     host = document.createElement('div');
     host.id = HOST_ID;
-    host.style.cssText = 'position:fixed;left:18px;top:84px;z-index:2147483647;';
+    host.style.cssText =
+      'position:fixed;left:18px;top:84px;z-index:2147483647;' +
+      'width:320px;height:360px;min-width:240px;min-height:44px;';
     shadow = host.attachShadow({ mode: 'open' });
     shadow.innerHTML = `
       <style>
         :host { all: initial; }
         .cap {
-          width: 272px;
+          position: relative;
+          width: 100%;
+          height: 100%;
+          box-sizing: border-box;
+          display: flex;
+          flex-direction: column;
           background: linear-gradient(180deg, #22262d 0%, #15181c 100%);
           color: #e8ecf1;
           border: 1px solid rgba(255,255,255,.1);
@@ -345,8 +418,11 @@
         .cap-head {
           display: flex; align-items: center; gap: 8px;
           padding: 10px 12px;
+          flex: none;
           background: rgba(255,255,255,.045);
           border-bottom: 1px solid rgba(255,255,255,.06);
+          cursor: move;
+          touch-action: none;
         }
         .logo {
           width: 20px; height: 20px; flex: none;
@@ -370,7 +446,12 @@
           font-size: 15px; line-height: 20px; cursor: pointer; border-radius: 5px;
         }
         .icon-btn:hover { background: rgba(255,255,255,.1); color: #fff; }
-        .cap-body { padding: 10px 12px 11px; }
+        .cap-body {
+          padding: 10px 12px 11px;
+          flex: 1;
+          min-height: 0;
+          overflow: auto;
+        }
         .status {
           font-size: 11.5px; color: #d7dde5;
           white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -399,7 +480,7 @@
         .log {
           margin-top: 8px; padding-top: 6px;
           border-top: 1px solid rgba(255,255,255,.07);
-          max-height: 74px; overflow: hidden;
+          max-height: 140px; overflow: auto;
         }
         .log-line {
           display: flex; gap: 6px;
@@ -411,12 +492,26 @@
         .log-line.warn { color: #f0b95f; }
         .log-line.err { color: #ff8b8b; }
         .tip { margin-top: 8px; font-size: 9.5px; color: #5f6975; line-height: 1.45; }
+        .resize-h {
+          position: absolute; right: 2px; bottom: 2px;
+          width: 18px; height: 18px; cursor: nwse-resize;
+          touch-action: none;
+        }
+        .resize-h::after {
+          content: '';
+          position: absolute; right: 3px; bottom: 3px;
+          width: 9px; height: 9px;
+          border-right: 2px solid rgba(255,255,255,.35);
+          border-bottom: 2px solid rgba(255,255,255,.35);
+        }
       </style>
       <div class="cap">
         <div class="cap-head">
           <div class="logo">▶</div>
           <div class="title">课程自动连播</div>
           <div class="badge" id="badge">就绪</div>
+          <button class="icon-btn" id="cover" title="覆盖视频区">⛶</button>
+          <button class="icon-btn" id="reset-ui" title="重置浮窗位置和大小">↺</button>
           <button class="icon-btn" id="collapse" title="收起/展开">−</button>
         </div>
         <div class="cap-body" id="body">
@@ -429,15 +524,17 @@
           </div>
           <label class="opt"><input type="checkbox" id="mute" checked> 静音播放</label>
           <label class="opt"><input type="checkbox" id="auto"> 进入课程页自动开始</label>
+          <label class="opt"><input type="checkbox" id="watch" checked> 检测到视频播放后自动接管</label>
           <label class="opt"><input type="checkbox" id="single"> 只完成当前页（做完就停）</label>
           <div class="log" id="log"></div>
-          <div class="tip">原理：拖到结尾触发站点自带保存；默认保存后暂停。</div>
+          <div class="tip">每节随机 5~10 秒播完；拖动标题移动，右下角缩放。</div>
         </div>
+        <div class="resize-h" id="resize"></div>
       </div>`;
 
     document.documentElement.appendChild(host);
 
-    for (const id of ['badge', 'body', 'status', 'progress', 'start', 'pause', 'stop', 'mute', 'auto', 'single', 'log', 'collapse']) {
+    for (const id of ['badge', 'body', 'status', 'progress', 'start', 'pause', 'stop', 'mute', 'auto', 'watch', 'single', 'log', 'collapse', 'cover', 'reset-ui', 'resize']) {
       ui[id] = shadow.getElementById(id);
     }
 
@@ -460,15 +557,80 @@
       S.autoStart = ui.auto.checked;
       saveSettings();
     });
+    ui.watch.addEventListener('change', () => {
+      S.watch = ui.watch.checked;
+      S.autoSuppressed = false;
+      saveSettings();
+    });
     ui.single.addEventListener('change', () => {
       S.single = ui.single.checked;
       saveSettings();
     });
+    ui.cover.addEventListener('click', coverVideoArea);
+    ui['reset-ui'].addEventListener('click', resetUiPosition);
     ui.collapse.addEventListener('click', () => {
       S.collapsed = !S.collapsed;
       ui.body.style.display = S.collapsed ? 'none' : 'block';
+      const h = S.ui?.h || 360;
+      host.style.height = `${S.collapsed ? S.uiCollapsedHeight : h}px`;
       ui.collapse.textContent = S.collapsed ? '+' : '−';
     });
+
+    // 拖动标题移动浮窗
+    const head = shadow.querySelector('.cap-head');
+    let drag = null;
+    head.addEventListener('pointerdown', (e) => {
+      if (e.target.closest('button,input')) return;
+      drag = {
+        dx: e.clientX - host.offsetLeft,
+        dy: e.clientY - host.offsetTop,
+      };
+      try { head.setPointerCapture(e.pointerId); } catch (_) {}
+      e.preventDefault();
+    });
+    head.addEventListener('pointermove', (e) => {
+      if (!drag) return;
+      const w = host.offsetWidth;
+      const h = host.offsetHeight;
+      host.style.left = `${Math.round(clamp(e.clientX - drag.dx, 0, Math.max(0, window.innerWidth - w)))}px`;
+      host.style.top = `${Math.round(clamp(e.clientY - drag.dy, 0, Math.max(0, window.innerHeight - h)))}px`;
+    });
+    const endDrag = () => {
+      if (!drag) return;
+      drag = null;
+      S.ui = currentUiRect();
+      saveSettings();
+    };
+    head.addEventListener('pointerup', endDrag);
+    head.addEventListener('pointercancel', endDrag);
+
+    // 右下角缩放
+    let resizing = null;
+    ui.resize.addEventListener('pointerdown', (e) => {
+      resizing = {
+        x: e.clientX,
+        y: e.clientY,
+        w: host.offsetWidth,
+        h: host.offsetHeight,
+      };
+      try { ui.resize.setPointerCapture(e.pointerId); } catch (_) {}
+      e.preventDefault();
+    });
+    ui.resize.addEventListener('pointermove', (e) => {
+      if (!resizing) return;
+      const maxW = Math.max(240, window.innerWidth - host.offsetLeft);
+      const maxH = Math.max(S.uiCollapsedHeight, window.innerHeight - host.offsetTop);
+      host.style.width = `${Math.round(clamp(resizing.w + e.clientX - resizing.x, 240, maxW))}px`;
+      host.style.height = `${Math.round(clamp(resizing.h + e.clientY - resizing.y, S.uiCollapsedHeight, maxH))}px`;
+    });
+    const endResize = () => {
+      if (!resizing) return;
+      resizing = null;
+      S.ui = currentUiRect();
+      saveSettings();
+    };
+    ui.resize.addEventListener('pointerup', endResize);
+    ui.resize.addEventListener('pointercancel', endResize);
 
     renderAll();
     loadSettings();
@@ -521,6 +683,7 @@
     renderButtons();
     if (ui.mute) ui.mute.checked = S.muted;
     if (ui.auto) ui.auto.checked = S.autoStart;
+    if (ui.watch) ui.watch.checked = S.watch;
     if (ui.single) ui.single.checked = S.single;
   }
 
@@ -538,12 +701,19 @@
   function saveSettings() {
     try {
       chrome.storage.local.set({
-        capSettings: { muted: S.muted, autoStart: S.autoStart, single: S.single },
+        capSettings: {
+          muted: S.muted,
+          autoStart: S.autoStart,
+          watch: S.watch,
+          single: S.single,
+          ui: currentUiRect(),
+        },
       });
     } catch (_) { /* 非扩展环境忽略 */ }
   }
 
   let settingsLoaded = false;
+  let settingsApplied = false;
 
   function loadSettings() {
     if (settingsLoaded) return;
@@ -552,11 +722,17 @@
       if (saved) {
         S.muted = saved.muted !== false;
         S.autoStart = saved.autoStart === true;
+        S.watch = saved.watch !== false;
         // 默认连续播放全部课时；只有用户主动勾选才只完成当前页
         S.single = saved.single === true;
+        if (saved.ui) applyUiRect(saved.ui);
+      } else if (window.__CAP_TEST_WATCH__ === false) {
+        S.watch = false;
       }
+      settingsApplied = true;
       if (ui.mute) ui.mute.checked = S.muted;
       if (ui.auto) ui.auto.checked = S.autoStart;
+      if (ui.watch) ui.watch.checked = S.watch;
       if (ui.single) ui.single.checked = S.single;
       maybeAutoStart();
     };
@@ -615,6 +791,8 @@
   async function playToEnd(firstVideo, token) {
     let video = firstVideo;
     let warned = false;
+    const planned = plannedSeconds();
+    let announced = false;
 
     for (let round = 0; round < 4; round++) {
       if (!alive() || token.cancelled || !S.running) return null;
@@ -628,14 +806,21 @@
       if (!video) return null;
       if (video.ended) return video;
 
+      if (!announced) {
+        announced = true;
+        log(`本节计划 ${planned.toFixed(1)} 秒内播完`, 'info');
+      }
+
       const duration = video.duration;
-      const target = Math.max(0, duration - 0.2);
+      // 从结尾前 5~10 秒开始，以正常速度播完最后一段。
+      const target = Math.max(0, duration - planned);
 
       try { document.dispatchEvent(new CustomEvent('cap-relax-seek')); } catch (_) {}
       try { video.muted = S.muted; } catch (_) {}
+      try { video.playbackRate = 1; } catch (_) {}
 
       try {
-        if (Math.abs(video.currentTime - target) > 0.15) video.currentTime = target;
+        if (Math.abs(video.currentTime - target) > 0.2) video.currentTime = target;
       } catch (_) {}
 
       await waitFor(() => !video.seeking, 4000, 120, token);
@@ -651,6 +836,7 @@
 
       if (video.ended) return video;
 
+      const startedAt = performance.now();
       try {
         await video.play();
       } catch (err) {
@@ -664,10 +850,25 @@
       }
 
       const ended = await waitFor(
-        () => video.ended || video.currentTime >= duration - 0.05,
-        6000, 150, token
+        () => {
+          if (video.ended || video.currentTime >= duration - 0.05) return true;
+          const elapsed = (performance.now() - startedAt) / 1000;
+          // 如果站点把进度拉回开头，自动提高倍速，保证仍能在计划时间内结束
+          if (elapsed > 1.2 && target > 1 && video.currentTime < target * 0.7) {
+            const remaining = Math.max(0.5, duration - video.currentTime);
+            const rate = clamp(remaining / Math.max(0.8, planned - elapsed), 1.5, 16);
+            try { video.playbackRate = rate; } catch (_) {}
+          }
+          return null;
+        },
+        Math.max(8000, planned * 1000 + 5000),
+        120,
+        token
       );
-      if (ended) return video;
+      if (ended) {
+        try { video.playbackRate = 1; } catch (_) {}
+        return video;
+      }
 
       await sleep(300);
       video = getVideo();
@@ -850,6 +1051,7 @@
 
       if (!alive() || !S.running || token.cancelled) break;
       if (result === 'single') {
+        S.autoSuppressed = true;
         S.done += 1;
         updateProgress();
         setBadge('已暂停', 'done');
@@ -858,6 +1060,7 @@
         break;
       }
       if (result === 'done') {
+        S.autoSuppressed = true;
         S.done += 1;
         try { getVideo()?.pause(); } catch (_) {}
         updateProgress();
@@ -868,6 +1071,7 @@
         break;
       }
       if (result === 'stuck') {
+        S.autoSuppressed = true;
         if (S.badgeKind !== 'err') {
           setBadge('已停止', 'err');
           setStatus('未能切换到下一节，已停止');
@@ -886,6 +1090,8 @@
     if (!isCoursePage()) { log('请先打开课程播放页再点开始', 'warn'); return; }
 
     releaseSingleHold();
+    S.autoSuppressed = false;
+    S.playWasActive = true;
     S.refreshing = false;
     S.resume = opts.resume || null;
     if (!opts.resume) { clearRefreshState(); sessionDel(RESUME_KEY); }
@@ -936,6 +1142,7 @@
 
   function stopRun() {
     releaseSingleHold();
+    S.autoSuppressed = true;
     sessionDel(RESUME_KEY);
     clearRefreshState();
     if (!S.running) return;
@@ -955,6 +1162,29 @@
   /* ------------------------------------------------------------------ */
 
   let autoStarted = false;
+
+  function videoActuallyPlaying() {
+    const v = getVideo();
+    return !!v &&
+      !v.paused &&
+      !v.ended &&
+      v.readyState >= 2 &&
+      Number.isFinite(v.currentTime) &&
+      v.currentTime > 0.05;
+  }
+
+  // 轮询站点播放器：视频真正开始播放后自动接管，不依赖用户先点“开始”。
+  function pollPlayback() {
+    if (!settingsApplied || !S.watch || !isCoursePage() || S.running || S.refreshing || S.autoSuppressed) return;
+    if (videoActuallyPlaying()) {
+      if (S.playWasActive) return;
+      S.playWasActive = true;
+      log('检测到视频正在播放，自动开始接管');
+      startRun({ detected: true });
+    } else {
+      S.playWasActive = false;
+    }
+  }
 
   function maybeAutoStart() {
     if (autoStarted || !isCoursePage()) return;
@@ -999,6 +1229,7 @@
     lastHref = location.href;
     syncRoute();
   });
+  setInterval(pollPlayback, 700);
 
   function boot() {
     if (isCoursePage()) {
