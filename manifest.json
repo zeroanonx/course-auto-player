@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "课程自动连播助手",
-  "version": "1.4.0",
-  "description": "检测视频播放后自动接管，每节随机 5~10 秒播完并自动连播；浮窗可拖动、缩放和覆盖视频区（仅对 hbnun.lsedu.vip 生效）。",
+  "name": "课程自动连播 + 考试自动答题助手",
+  "version": "1.5.0",
+  "description": "课程视频自动连播；考试/作业两遍作答（先取标准答案再按答案作答）。仅对 hbnun.lsedu.vip 生效。",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
@@ -14,10 +14,11 @@
     "activeTab"
   ],
   "host_permissions": [
-    "https://hbnun.lsedu.vip/*"
+    "https://hbnun.lsedu.vip/*",
+    "https://adulteduapi.lsedu.vip/*"
   ],
   "action": {
-    "default_title": "课程自动连播助手",
+    "default_title": "课程自动连播 + 考试自动答题",
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
@@ -31,7 +32,8 @@
         "https://hbnun.lsedu.vip/*"
       ],
       "js": [
-        "content.js"
+        "content.js",
+        "exam.js"
       ],
       "run_at": "document_idle",
       "all_frames": false
