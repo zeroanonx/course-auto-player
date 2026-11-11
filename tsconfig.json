@@ -1,0 +1,14 @@
+{
+  "extends": "plasmo/templates/tsconfig.base",
+  "exclude": ["node_modules"],
+  "include": [".plasmo/index.d.ts", "./**/*.ts", "./**/*.tsx", "./**/*.d.ts"],
+  "compilerOptions": {
+    "resolveJsonModule": true,
+    "strict": true,
+    "paths": {
+      "~*": ["./src/*"],
+      "@/*": ["./src/*"]
+    },
+    "baseUrl": "."
+  }
+}

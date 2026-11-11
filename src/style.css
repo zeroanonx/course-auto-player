@@ -1,0 +1,84 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+#plasmo-shadow-container {
+  z-index: 2147483646 !important;
+  all: initial;
+  box-sizing: border-box;
+}
+
+:host(plasmo-csui) {
+  color-scheme: dark;
+}
+
+@layer base {
+  :root {
+    --background: 220 18% 7%;
+    --foreground: 216 24% 95%;
+    --muted: 220 14% 12%;
+    --muted-foreground: 216 10% 59%;
+    --popover: 220 18% 8%;
+    --popover-foreground: 216 24% 95%;
+    --border: 219 14% 19%;
+    --input: 219 14% 24%;
+    --card: 220 17% 10%;
+    --card-foreground: 216 24% 95%;
+    --primary: 214 100% 72%;
+    --primary-foreground: 222 42% 8%;
+    --secondary: 219 15% 15%;
+    --secondary-foreground: 216 18% 90%;
+    --accent: 193 90% 62%;
+    --accent-foreground: 222 42% 8%;
+    --destructive: 2 78% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --ring: 214 100% 72%;
+    --radius: 0.5rem;
+    --font-sans: "Avenir Next", "PingFang SC", "Hiragino Sans GB",
+      "Microsoft YaHei", sans-serif;
+  }
+}
+
+html,
+body,
+#__plasmo {
+  width: 100%;
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-family: var(--font-sans);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+::selection {
+  background: hsl(var(--primary) / 0.28);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--border)) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: hsl(var(--border));
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
